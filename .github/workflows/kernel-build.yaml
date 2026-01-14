@@ -334,7 +334,7 @@ jobs:
           if [ -z "$OUT_DIR" ]; then
             OUT_DIR="."
           fi
-          cp ../out/arch/*/boot/* ../artifacts/
+          cp -r ../out/arch/*/boot/* ../artifacts/
           
           # Copy modules
           echo "Collecting modules..."
