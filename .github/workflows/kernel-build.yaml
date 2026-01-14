@@ -23,7 +23,7 @@ on:
         description: 'Defconfig files'
         required: true
         type: string
-        default: 'defconfig'
+        default: 'vendor/sdm845-perf_defconfig vendor/xiaomi/sdm845-common.config vendor/xiaomi/polaris.config'
       
       arch:
         description: 'Target architecture'
