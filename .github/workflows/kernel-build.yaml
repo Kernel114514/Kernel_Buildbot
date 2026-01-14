@@ -334,37 +334,11 @@ jobs:
           if [ -z "$OUT_DIR" ]; then
             OUT_DIR="."
           fi
-          
-          # Find and copy kernel image
-          case "${{ inputs.arch }}" in
-            arm64)
-              if [ -f "$OUT_DIR/arch/arm64/boot/Image.gz" ]; then
-                cp "$OUT_DIR/arch/arm64/boot/Image.gz" ../artifacts/
-              fi
-              if [ -f "$OUT_DIR/arch/arm64/boot/Image" ]; then
-                cp "$OUT_DIR/arch/arm64/boot/Image" ../artifacts/
-              fi
-              ;;
-            arm)
-              if [ -f "$OUT_DIR/arch/arm/boot/zImage" ]; then
-                cp "$OUT_DIR/arch/arm/boot/zImage" ../artifacts/
-              fi
-              ;;
-            x86_64|x86)
-              if [ -f "$OUT_DIR/arch/x86/boot/bzImage" ]; then
-                cp "$OUT_DIR/arch/x86/boot/bzImage" ../artifacts/
-              fi
-              ;;
-          esac
-          
-          # Copy device tree blobs if they exist
-          if [ -d "$OUT_DIR/arch/${{ inputs.arch }}/boot/dts" ]; then
-            find "$OUT_DIR/arch/${{ inputs.arch }}/boot/dts" -name "*.dtb" -exec cp {} ../artifacts/ \;
-          fi
+          cp ../out/arch/*/boot/* ../artifacts/
           
           # Copy modules
           echo "Collecting modules..."
-          find "$OUT_DIR" -name "*.ko" -exec cp {} ../artifacts/ \; 2>/dev/null || true
+          find "../out" -name "*.ko" -exec cp {} ../artifacts/ \; 2>/dev/null || true
           
           # Create build info
           cat > ../artifacts/build-info.txt << EOF
