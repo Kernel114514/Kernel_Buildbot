@@ -11,10 +11,10 @@ on:
         description: 'Kernel source repository URL'
         required: true
         type: string
-        default: 'https://github.com/torvalds/linux.git'
+        default: 'https://github.com/Kernel114514/android_kernel_xiaomi_sdm845'
       
       kernel_branch:
-        description: 'Kernel branch or tag'
+        description: 'lineage-23.1_xiaomi'
         required: true
         type: string
         default: 'master'
