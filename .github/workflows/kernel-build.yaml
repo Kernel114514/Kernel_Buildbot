@@ -96,7 +96,7 @@ jobs:
             libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
             libxml2-utils rsync unzip dwarves file python3 ccache jq bc \
             kmod libdw-dev elfutils gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi llvm
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi llvm cpio
           sudo apt-get clean
           echo "✅ Dependencies installed"
           echo "::endgroup::"
