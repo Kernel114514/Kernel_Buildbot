@@ -127,7 +127,7 @@ jobs:
           echo "::group::Cloning kernel source"
           echo "Repository: ${{ inputs.kernel_source }}"
           echo "Branch: ${{ inputs.kernel_branch }}"
-          
+          rm -rfv kernel out | true
           git clone --depth=1 --single-branch --branch "${{ inputs.kernel_branch }}" \
             "${{ inputs.kernel_source }}" kernel
           
