@@ -1,0 +1,421 @@
+name: Kernel Build XD
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_source:
+        description: 'Kernel source repository URL'
+        required: true
+        type: string
+        default: 'https://github.com/torvalds/linux.git'
+      
+      kernel_branch:
+        description: 'Kernel branch or tag'
+        required: true
+        type: string
+        default: 'master'
+      
+      defconfigs:
+        description: 'Defconfig files'
+        required: true
+        type: string
+        default: 'defconfig'
+      
+      arch:
+        description: 'Target architecture'
+        required: true
+        type: choice
+        options:
+          - arm64
+          - arm
+          - x86_64
+          - x86
+        default: arm64
+      
+      cross_compile:
+        description: 'Cross compiler prefix (leave empty for auto-detect)'
+        required: false
+        type: string
+        default: ''
+      
+      cross_compile_arm32:
+        description: 'ARM32 cross compiler prefix (for arm64 vdso32)'
+        required: false
+        type: string
+        default: ''
+      
+      clang_triple:
+        description: 'Clang triple (leave empty for auto-detect)'
+        required: false
+        type: string
+        default: ''
+      
+      out_dir:
+        description: 'Output directory (relative to kernel source, leave empty for in-tree build)'
+        required: false
+        type: string
+        default: ''
+      
+      compiler:
+        description: 'Compiler to use'
+        required: true
+        type: choice
+        options:
+          - clang
+          - gcc
+        default: clang
+      
+      use_ccache:
+        description: 'Use ccache for faster builds'
+        type: boolean
+        default: true
+      
+      make_jobs:
+        description: 'Number of parallel make jobs (0 = auto)'
+        required: false
+        type: string
+        default: '0'
+
+jobs:
+  build-kernel:
+    name: Build Kernel (${{ inputs.arch }}, ${{ inputs.compiler }})
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📦 Install build dependencies
+        run: |
+          set -euo pipefail
+          echo "::group::Install dependencies"
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential clang lld flex bison \
+            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
+            libxml2-utils rsync unzip dwarves file python3 ccache jq bc \
+            kmod libdw-dev elfutils gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          sudo apt-get clean
+          echo "✅ Dependencies installed"
+          echo "::endgroup::"
+
+      - name: ♻️ Setup ccache
+        if: ${{ inputs.use_ccache }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-kernel-${{ inputs.arch }}-${{ inputs.kernel_branch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-kernel-${{ inputs.arch }}-${{ inputs.kernel_branch }}-
+            ccache-kernel-${{ inputs.arch }}-
+
+      - name: ♻️ Configure ccache
+        if: ${{ inputs.use_ccache }}
+        run: |
+          echo "::group::ccache configuration"
+          ccache -o max_size=16
+          ccache -o compression=true
+          ccache -o compression_level=6
+          ccache -z
+          ccache -s
+          echo "::endgroup::"
+
+      - name: 📥 Clone kernel source
+        run: |
+          echo "::group::Cloning kernel source"
+          echo "Repository: ${{ inputs.kernel_source }}"
+          echo "Branch: ${{ inputs.kernel_branch }}"
+          
+          git clone --depth=1 --single-branch --branch "${{ inputs.kernel_branch }}" \
+            "${{ inputs.kernel_source }}" kernel
+          
+          cd kernel
+          echo "✅ Kernel source cloned"
+          git log -1 --oneline
+          echo "::endgroup::"
+
+      - name: 🔧 Prepare build environment
+        id: prepare
+        run: |
+          cd kernel
+          
+          # Determine number of jobs
+          JOBS="${{ inputs.make_jobs }}"
+          if [ "$JOBS" = "0" ] || [ -z "$JOBS" ]; then
+            JOBS=$(nproc)
+          fi
+          echo "jobs=$JOBS" >> "$GITHUB_OUTPUT"
+          echo "Using $JOBS parallel jobs"
+          
+          # Setup cross compile prefix
+          CROSS_COMPILE="${{ inputs.cross_compile }}"
+          if [ -z "$CROSS_COMPILE" ]; then
+            case "${{ inputs.arch }}" in
+              arm64)
+                CROSS_COMPILE="aarch64-linux-gnu-"
+                ;;
+              arm)
+                CROSS_COMPILE="arm-linux-gnueabi-"
+                ;;
+              *)
+                CROSS_COMPILE=""
+                ;;
+            esac
+          fi
+          
+          if [ -n "$CROSS_COMPILE" ]; then
+            echo "CROSS_COMPILE=$CROSS_COMPILE" >> "$GITHUB_ENV"
+            echo "Cross compile prefix: $CROSS_COMPILE"
+          fi
+          
+          # Setup ARM32 cross compile (for arm64 vdso32)
+          CROSS_COMPILE_ARM32="${{ inputs.cross_compile_arm32 }}"
+          if [ -z "$CROSS_COMPILE_ARM32" ] && [ "${{ inputs.arch }}" = "arm64" ]; then
+            CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+          fi
+          
+          if [ -n "$CROSS_COMPILE_ARM32" ]; then
+            echo "CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32" >> "$GITHUB_ENV"
+            echo "ARM32 cross compile prefix: $CROSS_COMPILE_ARM32"
+          fi
+          
+          # Setup clang triple
+          CLANG_TRIPLE="${{ inputs.clang_triple }}"
+          if [ -z "$CLANG_TRIPLE" ] && [ "${{ inputs.compiler }}" = "clang" ]; then
+            case "${{ inputs.arch }}" in
+              arm64)
+                CLANG_TRIPLE="aarch64-linux-gnu-"
+                ;;
+              arm)
+                CLANG_TRIPLE="arm-linux-gnueabi-"
+                ;;
+            esac
+          fi
+          
+          if [ -n "$CLANG_TRIPLE" ]; then
+            echo "CLANG_TRIPLE=$CLANG_TRIPLE" >> "$GITHUB_ENV"
+            echo "Clang triple: $CLANG_TRIPLE"
+          fi
+          
+          # Setup output directory
+          OUT_DIR="${{ inputs.out_dir }}"
+          if [ -n "$OUT_DIR" ]; then
+            echo "O=$OUT_DIR" >> "$GITHUB_ENV"
+            echo "Output directory: $OUT_DIR"
+          fi
+          
+          # Setup architecture
+          echo "ARCH=${{ inputs.arch }}" >> "$GITHUB_ENV"
+          
+          # Setup ccache
+          if [ "${{ inputs.use_ccache }}" = "true" ]; then
+            echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"
+          fi
+          
+          # Get kernel version
+          KERNEL_VERSION=$(make kernelversion 2>/dev/null || echo "unknown")
+          echo "kernel_version=$KERNEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Kernel version: $KERNEL_VERSION"
+
+      - name: 🔨 Configure kernel
+        run: |
+          cd kernel
+          
+          echo "::group::Kernel configuration"
+          echo "Architecture: ${{ inputs.arch }}"
+          echo "Defconfigs: ${{ inputs.defconfigs }}"
+          
+          # Build make command for defconfig
+          MAKE_CMD="make"
+          
+          if [ "${{ inputs.compiler }}" = "clang" ]; then
+            MAKE_CMD="$MAKE_CMD CC=clang"
+          fi
+          
+          MAKE_CMD="$MAKE_CMD ARCH=${{ inputs.arch }}"
+          
+          if [ -n "$CROSS_COMPILE" ]; then
+            MAKE_CMD="$MAKE_CMD CROSS_COMPILE=$CROSS_COMPILE"
+          fi
+          
+          if [ -n "$CROSS_COMPILE_ARM32" ]; then
+            MAKE_CMD="$MAKE_CMD CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
+          fi
+          
+          if [ -n "$CLANG_TRIPLE" ]; then
+            MAKE_CMD="$MAKE_CMD CLANG_TRIPLE=$CLANG_TRIPLE"
+          fi
+          
+          if [ -n "$O" ]; then
+            MAKE_CMD="$MAKE_CMD O=$O"
+          fi
+          
+          # Add defconfigs
+          MAKE_CMD="$MAKE_CMD ${{ inputs.defconfigs }}"
+          
+          echo "Running: $MAKE_CMD"
+          eval $MAKE_CMD
+          
+          echo "✅ Kernel configured"
+          echo "::endgroup::"
+
+      - name: 🏗️ Build kernel
+        id: build
+        run: |
+          cd kernel
+          
+          START_TIME=$(date +%s)
+          
+          echo "::group::Building kernel"
+          echo "Jobs: ${{ steps.prepare.outputs.jobs }}"
+          
+          # Build make command
+          MAKE_CMD="make"
+          
+          if [ "${{ inputs.compiler }}" = "clang" ]; then
+            MAKE_CMD="$MAKE_CMD CC=clang LLVM=1 LLVM_IAS=1"
+          fi
+          
+          MAKE_CMD="$MAKE_CMD ARCH=${{ inputs.arch }}"
+          
+          if [ -n "$CROSS_COMPILE" ]; then
+            MAKE_CMD="$MAKE_CMD CROSS_COMPILE=$CROSS_COMPILE"
+          fi
+          
+          if [ -n "$CROSS_COMPILE_ARM32" ]; then
+            MAKE_CMD="$MAKE_CMD CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
+          fi
+          
+          if [ -n "$CLANG_TRIPLE" ]; then
+            MAKE_CMD="$MAKE_CMD CLANG_TRIPLE=$CLANG_TRIPLE"
+          fi
+          
+          if [ -n "$O" ]; then
+            MAKE_CMD="$MAKE_CMD O=$O"
+          fi
+          
+          MAKE_CMD="$MAKE_CMD -j${{ steps.prepare.outputs.jobs }}"
+          
+          echo "Running: $MAKE_CMD"
+          eval $MAKE_CMD
+          
+          END_TIME=$(date +%s)
+          BUILD_TIME=$((END_TIME - START_TIME))
+          
+          echo "build_time=$BUILD_TIME" >> "$GITHUB_OUTPUT"
+          echo "✅ Kernel built successfully in ${BUILD_TIME}s"
+          echo "::endgroup::"
+
+      - name: 📊 Build statistics
+        if: always()
+        run: |
+          cd kernel
+          
+          echo "::group::Build Statistics"
+          
+          if [ "${{ inputs.use_ccache }}" = "true" ]; then
+            echo "ccache statistics:"
+            ccache -s
+          fi
+          
+          echo ""
+          echo "Kernel version: ${{ steps.prepare.outputs.kernel_version }}"
+          echo "Build time: ${{ steps.build.outputs.build_time }}s"
+          echo "Architecture: ${{ inputs.arch }}"
+          echo "Compiler: ${{ inputs.compiler }}"
+          
+          echo "::endgroup::"
+
+      - name: 📦 Package kernel artifacts
+        if: success()
+        run: |
+          cd kernel
+          
+          echo "::group::Packaging artifacts"
+          
+          mkdir -p ../artifacts
+          
+          # Determine output directory
+          OUT_DIR="${{ inputs.out_dir }}"
+          if [ -z "$OUT_DIR" ]; then
+            OUT_DIR="."
+          fi
+          
+          # Find and copy kernel image
+          case "${{ inputs.arch }}" in
+            arm64)
+              if [ -f "$OUT_DIR/arch/arm64/boot/Image.gz" ]; then
+                cp "$OUT_DIR/arch/arm64/boot/Image.gz" ../artifacts/
+              fi
+              if [ -f "$OUT_DIR/arch/arm64/boot/Image" ]; then
+                cp "$OUT_DIR/arch/arm64/boot/Image" ../artifacts/
+              fi
+              ;;
+            arm)
+              if [ -f "$OUT_DIR/arch/arm/boot/zImage" ]; then
+                cp "$OUT_DIR/arch/arm/boot/zImage" ../artifacts/
+              fi
+              ;;
+            x86_64|x86)
+              if [ -f "$OUT_DIR/arch/x86/boot/bzImage" ]; then
+                cp "$OUT_DIR/arch/x86/boot/bzImage" ../artifacts/
+              fi
+              ;;
+          esac
+          
+          # Copy device tree blobs if they exist
+          if [ -d "$OUT_DIR/arch/${{ inputs.arch }}/boot/dts" ]; then
+            find "$OUT_DIR/arch/${{ inputs.arch }}/boot/dts" -name "*.dtb" -exec cp {} ../artifacts/ \;
+          fi
+          
+          # Copy modules
+          echo "Collecting modules..."
+          find "$OUT_DIR" -name "*.ko" -exec cp {} ../artifacts/ \; 2>/dev/null || true
+          
+          # Create build info
+          cat > ../artifacts/build-info.txt << EOF
+          Kernel Version: ${{ steps.prepare.outputs.kernel_version }}
+          Architecture: ${{ inputs.arch }}
+          Compiler: ${{ inputs.compiler }}
+          Defconfigs: ${{ inputs.defconfigs }}
+          Build Time: ${{ steps.build.outputs.build_time }}s
+          Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          Source: ${{ inputs.kernel_source }}
+          Branch: ${{ inputs.kernel_branch }}
+          EOF
+          
+          echo "✅ Artifacts packaged"
+          ls -lh ../artifacts/
+          echo "::endgroup::"
+
+      - name: 📤 Upload kernel artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ inputs.arch }}-${{ steps.prepare.outputs.kernel_version }}
+          path: artifacts/
+          retention-days: 7
+
+      - name: 📝 Job summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎯 Kernel Build Summary
+          
+          **Status:** ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}
+          
+          | Metric | Value |
+          |--------|-------|
+          | **Kernel Version** | ${{ steps.prepare.outputs.kernel_version }} |
+          | **Architecture** | ${{ inputs.arch }} |
+          | **Compiler** | ${{ inputs.compiler }} |
+          | **Defconfigs** | \`${{ inputs.defconfigs }}\` |
+          | **Build Time** | ${{ steps.build.outputs.build_time }}s |
+          | **ccache** | ${{ inputs.use_ccache && '✅ Enabled' || '❌ Disabled' }} |
+          
+          **Source:**
+          - Repository: ${{ inputs.kernel_source }}
+          - Branch: ${{ inputs.kernel_branch }}
+          EOF
