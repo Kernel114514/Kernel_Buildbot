@@ -247,11 +247,7 @@ jobs:
           if [ -n "$CLANG_TRIPLE" ]; then
             MAKE_CMD="$MAKE_CMD CLANG_TRIPLE=$CLANG_TRIPLE"
           fi
-          
-          if [ -n "$O" ]; then
-            MAKE_CMD="$MAKE_CMD O=$O"
-          fi
-          
+          MAKE_CMD="$MAKE_CMD O=../out"
           # Add defconfigs
           MAKE_CMD="$MAKE_CMD ${{ inputs.defconfigs }}"
           
@@ -291,11 +287,7 @@ jobs:
           if [ -n "$CLANG_TRIPLE" ]; then
             MAKE_CMD="$MAKE_CMD CLANG_TRIPLE=$CLANG_TRIPLE"
           fi
-          
-          if [ -n "$O" ]; then
-            MAKE_CMD="$MAKE_CMD O=$O"
-          fi
-          
+          MAKE_CMD="$MAKE_CMD O=../out"
           MAKE_CMD="$MAKE_CMD -j${{ steps.prepare.outputs.jobs }}"
           
           echo "Running: $MAKE_CMD"
