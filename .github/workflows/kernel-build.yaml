@@ -83,7 +83,7 @@ on:
 jobs:
   build-kernel:
     name: Build Kernel (${{ inputs.arch }}, ${{ inputs.compiler }})
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     
     steps:
       - name: 📦 Install build dependencies
