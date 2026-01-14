@@ -14,10 +14,10 @@ on:
         default: 'https://github.com/Kernel114514/android_kernel_xiaomi_sdm845'
       
       kernel_branch:
-        description: 'lineage-23.1_xiaomi'
+        description: 'Kernel branch'
         required: true
         type: string
-        default: 'master'
+        default: 'lineage-23.1_xiaomi'
       
       defconfigs:
         description: 'Defconfig files'
